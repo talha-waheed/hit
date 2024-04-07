@@ -97,7 +97,11 @@ func makeRequest(reqURL string, resChan chan Response, reqNum int) {
 		startReq.UnixNano(), latency.Nanoseconds(), readTime.Nanoseconds()}
 }
 
-func makeReqToEndpoint(endpoint Endpoint, resChan chan Response, reqNum int) {
+func makeReqToEndpoint(
+	endpoint Endpoint,
+	resChan chan Response,
+	reqNum int,
+	headers map[string]string) {
 
 	reqURL := endpoint.URL
 
@@ -112,6 +116,9 @@ func makeReqToEndpoint(endpoint Endpoint, resChan chan Response, reqNum int) {
 		return
 	}
 	req.Header.Set("Connection", "close")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
 
 	startReq := time.Now()
 	// client := http.Client{
@@ -195,7 +202,8 @@ func repeatRequests(
 	endTimeMs int,
 	lastReqCountChan chan int,
 	isReadable bool,
-	distributionName string) {
+	distributionName string,
+	headers map[string]string) {
 
 	fmt.Printf("Making requests for %dms at %dms interval\n", endTimeMs,
 		repeatIntervalMs)
@@ -215,7 +223,7 @@ func repeatRequests(
 			lastTime = time.Now()
 			endpoint := lb.GetEndpointForReq(reqCounter)
 			cpuModifier.NotifyReqSent(endpoint)
-			go makeReqToEndpoint(endpoint, resChan, reqCounter)
+			go makeReqToEndpoint(endpoint, resChan, reqCounter, headers)
 			if isReadable {
 				fmt.Println("Making request ", reqCounter, " to ",
 					endpoint.URL)
@@ -298,7 +306,8 @@ func repeatNodalRequests(
 		case <-time.After(interval.Next() - time.Since(lastTime)):
 			lastTime = time.Now()
 			endpointToReq := lb.GetEndpointForReq(endpoints)
-			go makeReqToEndpoint(endpointToReq, resChan, reqCounter)
+			go makeReqToEndpoint(endpointToReq, resChan, reqCounter,
+				make(map[string]string))
 			if isReadable {
 				fmt.Printf("Making request %d to app%d-node%d\n", reqCounter,
 					endpointToReq.App, endpointToReq.Node)
@@ -341,7 +350,8 @@ func repeatGlobalRequests(
 		case <-time.After(interval.Next() - time.Since(lastTime)):
 			lastTime = time.Now()
 			endpointToReq := lb.GetEndpointForReq(endpoints)
-			go makeReqToEndpoint(endpointToReq, resChan, reqCounter)
+			go makeReqToEndpoint(endpointToReq, resChan, reqCounter,
+				map[string]string{})
 			if isReadable {
 				fmt.Printf("Making request %d to app%d-node%d\n", reqCounter,
 					endpointToReq.App, endpointToReq.Node)
@@ -378,11 +388,18 @@ type Endpoint struct {
 }
 
 type Config struct {
-	Endpoints     []Endpoint `json:"endpoints"`
-	ReqIntervalMs int        `json:"reqIntervalMs"`
-	DurationMs    int        `json:"durationMs"`
-	LogFileName   string     `json:"logFileName"`
-	StallTimeMs   int        `json:"stallTimeMs"`
+	Endpoints     []Endpoint        `json:"endpoints"`
+	ReqIntervalMs int               `json:"reqIntervalMs"`
+	DurationMs    int               `json:"durationMs"`
+	LogFileName   string            `json:"logFileName"`
+	StallTimeMs   int               `json:"stallTimeMs"`
+	Headers       map[string]string `json:"headers"`
+}
+
+func jsonToMap(jsonStr string) map[string]string {
+	result := make(map[string]string)
+	json.Unmarshal([]byte(jsonStr), &result)
+	return result
 }
 
 func getConfigs() ([]Config, bool, string, bool, bool, bool) {
@@ -393,6 +410,7 @@ func getConfigs() ([]Config, bool, string, bool, bool, bool) {
 	reqRatePerSec := flag.Int("rps", 1, "Requests to make per sec")
 	durationInSec := flag.Int("d", 4, "Duration in sec")
 	logFileName := flag.String("l", "", "Log file name")
+	headers := flag.String("headers", "", "Headers to send with the request")
 
 	isReadable := flag.Bool("r", false, "Print readable statistics")
 
@@ -467,6 +485,7 @@ func getConfigs() ([]Config, bool, string, bool, bool, bool) {
 			DurationMs:    *durationInSec * 1000,
 			LogFileName:   *logFileName,
 			StallTimeMs:   *stallTimeMs,
+			Headers:       jsonToMap(*headers),
 		}}
 
 		return configs, *isReadable, *distributionName,
@@ -543,7 +562,8 @@ func hit(
 		durationMs,
 		lastReqCountChan,
 		isReadable,
-		distributionName)
+		distributionName,
+		config.Headers)
 
 	// now, repeatedly listen for responses and the last response number,
 	// 	end when the last response is received
