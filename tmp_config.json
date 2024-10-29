@@ -1,0 +1,44 @@
+[
+    {
+        "endpoints": [
+            {
+                "url": "http://10.108.8.254:80/?loopCount=25&base=6&exp=6",
+                "node": 1,
+                "app": 1,
+                "headers": "{\"Host\":\"app1.mplb.com\"}"
+            }
+        ],
+        "reqIntervalMs": 13.333,
+        "durationMs": 15000,
+        "logFileName": "app1.log",
+        "stallTimeMs": 0
+    },
+    {
+        "endpoints": [
+            {
+                "url": "http://10.108.8.254:80/?loopCount=25&base=6&exp=6",
+                "node": 1,
+                "app": 2,
+                "headers": "{\"Host\":\"app2.mplb.com\"}"
+            }
+        ],
+        "reqIntervalMs": 20,
+        "durationMs": 15000,
+        "logFileName": "app2.log",
+        "stallTimeMs": 0
+    },
+    {
+        "endpoints": [
+            {
+                "url": "http://10.108.8.254:80/?loopCount=25&base=6&exp=6",
+                "node": 1,
+                "app": 3,
+                "headers": "{\"Host\":\"app3.mplb.com\"}"
+            }
+        ],
+        "reqIntervalMs": 40,
+        "durationMs": 15000,
+        "logFileName": "app3.log",
+        "stallTimeMs": 0
+    }
+]

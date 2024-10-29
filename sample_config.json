@@ -1,0 +1,56 @@
+[
+    {
+        "endpoints": [
+            {
+                "url": "http://192.168.59.100:30251/?loopCount=2&base=7&exp=7",
+                "node": 1,
+                "app": 1,
+                "headers": {}
+            },
+            {
+                "url": "http://192.168.59.100:30675/?loopCount=2&base=7&exp=7",
+                "node": 2,
+                "app": 1,
+                "headers": {}
+            }
+        ],
+        "reqIntervalMs": 15,
+        "durationMs": 120,
+        "logFileName": "logs_cpusharing_nodes2,3_localLR_Dec8/none_app1_3",
+        "stallTimeMs": 0
+    },
+    {
+        "endpoints": [
+            {
+                "url": "http://192.168.59.100:32443/?loopCount=2&base=7&exp=7",
+                "node": 2,
+                "app": 2,
+                "headers": {}
+            },
+            {
+                "url": "http://192.168.59.100:30810/?loopCount=2&base=7&exp=7",
+                "node": 3,
+                "app": 2,
+                "headers": {}
+            }
+        ],
+        "reqIntervalMs": 22,
+        "durationMs": 120,
+        "logFileName": "logs_cpusharing_nodes2,3_localLR_Dec8/none_app2_3",
+        "stallTimeMs": 0
+    },
+    {
+        "endpoints": [
+            {
+                "url": "http://192.168.59.100:30145/?loopCount=2&base=7&exp=7",
+                "node": 1,
+                "app": 3,
+                "headers": {}
+            }
+        ],
+        "reqIntervalMs": 47,
+        "durationMs": 120,
+        "logFileName": "logs_cpusharing_nodes2,3_localLR_Dec8/none_app3_3",
+        "stallTimeMs": 0
+    }
+]
