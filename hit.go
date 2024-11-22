@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand"
 	"net/http"
 	"os"
 	"sync"
@@ -194,6 +195,8 @@ func (interval *Interval) Initialize(
 	interval.repeatIntervalMs = repeatIntervalMs
 	interval.distribution = distributionName
 
+	rand.Seed(time.Now().UnixNano())
+
 	if interval.distribution == "poisson" {
 		panic("Poisson distribution not implemented yet")
 		// interval.poisson = distuv.Poisson{
@@ -208,6 +211,11 @@ func (interval *Interval) Next() time.Duration {
 		panic("Poisson distribution not implemented yet")
 		// return time.Duration(
 		// 	interval.poisson.Rand() * float64(time.Millisecond))
+	} else if interval.distribution == "exponential" {
+		mean := interval.repeatIntervalMs
+		exponentialRandom := -mean * math.Log(1-rand.Float64())
+		// fmt.Printf("Exponential Random: %f\n", exponentialRandom)
+		return time.Duration(exponentialRandom) * time.Millisecond
 	} else {
 		return time.Duration(interval.repeatIntervalMs) * time.Millisecond
 	}
@@ -454,7 +462,7 @@ func getConfigs() ([]Config, bool, string, bool, bool, bool) {
 	distributionName := flag.String(
 		"distr",
 		"none",
-		"Distribution name [none|poisson] (default: none)")
+		"Distribution name [none|exponential] (default: none)")
 
 	flag.Parse()
 
