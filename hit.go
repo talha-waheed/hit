@@ -10,6 +10,8 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"regexp"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -96,13 +98,52 @@ func makeRequest(reqURL string, resChan chan Response, reqNum int) {
 		startReq.UnixNano(), latency.Nanoseconds(), readTime.Nanoseconds()}
 }
 
+// Function to parse URL
+// replace "EXP<\d+>" in the URL with a random integer distributed exponentially
+//
+//	with the mean as the \d+ in teh pattern
+func parseURL(s string) string {
+	// Define the regular expression to match "EXP<\d+>"
+	re := regexp.MustCompile(`EXP<(\d+)>`)
+
+	// Check if the pattern matches
+	if match := re.FindStringSubmatch(s); len(match) > 1 {
+		// If a match is found, return the original string
+		// Seed the random number generator
+		// rand.Seed(time.Now().UnixNano())
+
+		// Replace pattern with a random integer from an exponential distribution
+		return re.ReplaceAllStringFunc(s, func(match string) string {
+
+			if submatch := re.FindStringSubmatch(match); len(submatch) > 1 {
+
+				floatValue, err := strconv.ParseFloat(submatch[1], 64)
+				if err != nil {
+					fmt.Println("Error:", err)
+					return match
+				}
+				expMean := floatValue
+
+				exponentialRandom := -expMean * math.Log(1-rand.Float64())
+
+				// Generate a random integer exponential value
+				return fmt.Sprintf("%d", int(exponentialRandom))
+			}
+
+			return match
+		})
+	}
+
+	return s
+}
+
 func makeReqToEndpoint(
 	endpoint Endpoint,
 	resChan chan Response,
 	reqNum int,
 	headers map[string]string) {
 
-	reqURL := endpoint.URL
+	reqURL := parseURL(endpoint.URL)
 
 	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
 	if err != nil {
