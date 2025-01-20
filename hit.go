@@ -552,9 +552,15 @@ func getConfigs() ([]Config, bool, string, bool, bool, bool) {
 			}
 		}
 
+		reqIntervalMs := 1000.0 / *reqRatePerSec
+		if *reqRatePerSec == 0 {
+			// set reqIntervalMs as infinity
+			reqIntervalMs = float64((*durationInSec + 1) * 1000)
+		}
+
 		configs := []Config{{
 			Endpoints:     endpoints,
-			ReqIntervalMs: 1000.0 / *reqRatePerSec,
+			ReqIntervalMs: reqIntervalMs,
 			DurationMs:    *durationInSec * 1000,
 			LogFileName:   *logFileName,
 			StallTimeMs:   *stallTimeMs,
