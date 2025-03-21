@@ -236,8 +236,6 @@ func (interval *Interval) Initialize(
 	interval.repeatIntervalMs = repeatIntervalMs
 	interval.distribution = distributionName
 
-	rand.Seed(time.Now().UnixNano())
-
 	if interval.distribution == "poisson" {
 		panic("Poisson distribution not implemented yet")
 		// interval.poisson = distuv.Poisson{
@@ -247,16 +245,43 @@ func (interval *Interval) Initialize(
 	}
 }
 
+// Pareto sample generator
+func paretoSample(alpha, beta float64) float64 {
+	// Generate a uniform random number in the range (0, 1)
+	u := rand.Float64()
+
+	// Generate a Pareto-distributed sample
+	return alpha / math.Pow(u, 1.0/beta)
+}
+
+func paretoSampleWithMean(desiredMean float64) float64 {
+
+	// Shape parameter
+	beta := 1.5
+
+	// Calculate alpha from the mean formula
+	alpha := desiredMean * (beta - 1) / beta
+
+	return paretoSample(alpha, beta)
+}
+
 func (interval *Interval) Next() time.Duration {
 	if interval.distribution == "poisson" {
 		panic("Poisson distribution not implemented yet")
 		// return time.Duration(
 		// 	interval.poisson.Rand() * float64(time.Millisecond))
+
 	} else if interval.distribution == "exponential" {
 		mean := interval.repeatIntervalMs
 		exponentialRandom := -mean * math.Log(1-rand.Float64())
 		// fmt.Printf("Exponential Random: %f\n", exponentialRandom)
 		return time.Duration(exponentialRandom) * time.Millisecond
+
+	} else if interval.distribution == "pareto" {
+		mean := interval.repeatIntervalMs
+		paretoRandom := paretoSampleWithMean(mean)
+		return time.Duration(paretoRandom) * time.Millisecond
+
 	} else {
 		return time.Duration(interval.repeatIntervalMs) * time.Millisecond
 	}
@@ -503,7 +528,7 @@ func getConfigs() ([]Config, bool, string, bool, bool, bool) {
 	distributionName := flag.String(
 		"distr",
 		"none",
-		"Distribution name [none|exponential] (default: none)")
+		"Distribution name [none|exponential|pareto] (default: none)")
 
 	flag.Parse()
 
