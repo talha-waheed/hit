@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"regexp"
 	"strconv"
@@ -26,16 +27,17 @@ type GurobiResponse struct {
 }
 
 type Response struct {
-	ReqURL      string
-	ReqEndpoint Endpoint
-	ReqNum      int
-	IsError     bool
-	ErrMsg      string
-	StatusCode  int
-	Body        string
-	StartTimeNs int64
-	LatencyNs   int64
-	ReadTimeNs  int64
+	ReqURL          string
+	ReqEndpoint     Endpoint
+	ReqNum          int
+	IsError         bool
+	ErrMsg          string
+	StatusCode      int
+	Body            string
+	StartTimeNs     int64
+	LatencyNs       int64
+	WireLatencyNs   int64
+	SetupOverheadNs int64
 }
 
 func makeRequest(reqURL string, resChan chan Response, reqNum int) {
@@ -47,7 +49,7 @@ func makeRequest(reqURL string, resChan chan Response, reqNum int) {
 			reqNum,
 			true, errMsg,
 			0, "",
-			time.Now().UnixNano(), 0, 0}
+			time.Now().UnixNano(), 0, 0, 0}
 		return
 	}
 	req.Header.Set("Connection", "close")
@@ -73,7 +75,7 @@ func makeRequest(reqURL string, resChan chan Response, reqNum int) {
 			reqNum,
 			true, errMsg,
 			0, "",
-			startReq.UnixNano(), latency.Nanoseconds(), 0}
+			startReq.UnixNano(), latency.Nanoseconds(), 0, 0}
 		return
 	}
 
@@ -87,7 +89,7 @@ func makeRequest(reqURL string, resChan chan Response, reqNum int) {
 			reqNum,
 			true, errMsg,
 			res.StatusCode, "",
-			startReq.UnixNano(), latency.Nanoseconds(), readTime.Nanoseconds()}
+			startReq.UnixNano(), latency.Nanoseconds(), readTime.Nanoseconds(), 0}
 		return
 	}
 
@@ -95,7 +97,7 @@ func makeRequest(reqURL string, resChan chan Response, reqNum int) {
 		reqNum,
 		false, "",
 		res.StatusCode, string(resBody),
-		startReq.UnixNano(), latency.Nanoseconds(), readTime.Nanoseconds()}
+		startReq.UnixNano(), latency.Nanoseconds(), readTime.Nanoseconds(), 0}
 }
 
 // Function to parse URL
@@ -152,7 +154,7 @@ func makeReqToEndpoint(
 			reqNum,
 			true, errMsg,
 			0, "",
-			time.Now().UnixNano(), 0, 0}
+			time.Now().UnixNano(), 0, 0, 0}
 		return
 	}
 
@@ -175,7 +177,6 @@ func makeReqToEndpoint(
 	}
 	req.Header.Set("Connection", "close")
 
-	startReq := time.Now()
 	// client := http.Client{
 	// 	Transport: &http2.Transport{
 	// 		// So http2.Transport doesn't complain the URL scheme isn't 'https'
@@ -187,11 +188,44 @@ func makeReqToEndpoint(
 	// 	},
 	// }
 	// res, err := client.Do(req)
+
+	// --- NEW: Tracing Hooks ---
+	var dnsStart, connStart, wroteRequest, firstByte time.Time
+	var dnsDone, connDone time.Duration
+
+	trace := &httptrace.ClientTrace{
+		DNSStart:     func(_ httptrace.DNSStartInfo) { dnsStart = time.Now() },
+		DNSDone:      func(_ httptrace.DNSDoneInfo) { dnsDone = time.Since(dnsStart) },
+		ConnectStart: func(_, _ string) { connStart = time.Now() },
+		ConnectDone:  func(_, _ string, _ error) { connDone = time.Since(connStart) },
+		WroteRequest: func(_ httptrace.WroteRequestInfo) {
+			wroteRequest = time.Now()
+		},
+		GotFirstResponseByte: func() {
+			firstByte = time.Now()
+		},
+	}
+
+	// Attach the trace to the request context
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+
 	client := &http.Client{
 		Timeout: 5 * time.Second, // Set a timeout for the entire request
 	}
+
+	startReq := time.Now()
+
 	res, err := client.Do(req)
-	latency := time.Since(startReq)
+	totalLatency := time.Since(startReq)
+
+	// --- ANALYSIS ---
+	// This is the duration Istio actually sees (Request in flight)
+	wireLatency := firstByte.Sub(wroteRequest)
+	// This is the overhead of Connection: close
+	setupOverhead := connDone + dnsDone
+
+	// fmt.Printf("[%d] Setup: %v | On-Wire: %v | Total: %v\n",
+	// 	reqNum, setupOverhead, wireLatency, totalLatency)
 
 	if err != nil {
 		errMsg := fmt.Sprintf("client: error making http request: %s", err)
@@ -199,13 +233,13 @@ func makeReqToEndpoint(
 			reqNum,
 			true, errMsg,
 			0, "",
-			startReq.UnixNano(), latency.Nanoseconds(), 0}
+			startReq.UnixNano(), totalLatency.Nanoseconds(), wireLatency.Nanoseconds(), setupOverhead.Nanoseconds()}
 		return
 	}
 
-	startRead := time.Now()
+	// startRead := time.Now()
 	resBody, err := io.ReadAll(res.Body)
-	readTime := time.Since(startRead)
+	// readTime := time.Since(startRead)
 
 	if err != nil {
 		errMsg := fmt.Sprintf("client: could not read response body: %s", err)
@@ -213,7 +247,7 @@ func makeReqToEndpoint(
 			reqNum,
 			true, errMsg,
 			res.StatusCode, "",
-			startReq.UnixNano(), latency.Nanoseconds(), readTime.Nanoseconds()}
+			startReq.UnixNano(), totalLatency.Nanoseconds(), wireLatency.Nanoseconds(), setupOverhead.Nanoseconds()}
 		return
 	}
 
@@ -221,7 +255,7 @@ func makeReqToEndpoint(
 		reqNum,
 		false, "",
 		res.StatusCode, string(resBody),
-		startReq.UnixNano(), latency.Nanoseconds(), readTime.Nanoseconds()}
+		startReq.UnixNano(), totalLatency.Nanoseconds(), wireLatency.Nanoseconds(), setupOverhead.Nanoseconds()}
 }
 
 type Interval struct {
@@ -361,7 +395,7 @@ func logResponseStats(
 	if isReadable {
 		fmt.Printf("{%s} res %d [%d]: %s, latency: %fms %fms\n",
 			resp.ReqURL, resp.ReqNum, resp.StatusCode, resp.Body,
-			float64(resp.LatencyNs)/1000000, float64(resp.ReadTimeNs)/1000000)
+			float64(resp.LatencyNs)/1000000, float64(resp.WireLatencyNs)/1000000)
 	} else {
 		respJSON, err := json.Marshal(resp)
 		if err != nil {
