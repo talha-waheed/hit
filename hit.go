@@ -12,6 +12,7 @@ import (
 	"net/http/httptrace"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -321,33 +322,110 @@ func (interval *Interval) Next() time.Duration {
 	}
 }
 
+type RequestIntervalUpdate struct {
+	AtMs          int     `json:"atMs"`
+	ReqIntervalMs float64 `json:"reqIntervalMs"`
+}
+
 func repeatRequests(
 	cpuModifier *CPUWeightModifier,
 	endpoints []Endpoint,
 	lb *LoadBalancer,
 	resChan chan Response,
 	repeatIntervalMs float64,
+	requestIntervalUpdates []RequestIntervalUpdate,
 	endTimeMs int,
 	lastReqCountChan chan int,
 	isReadable bool,
 	distributionName string,
 	headers map[string]string) {
 
+	// repeatRequests drives request generation for a single experiment.
+	//
+	// It has three independent time-based concerns:
+	//  1) Request scheduling (based on Interval.Next(), possibly stochastic)
+	//  2) Request-interval updates (deterministic wall-clock times since experiment start)
+	//  3) End-of-measurement (after endTimeMs) – we publish the last request id to measure
+	//
+	// The function intentionally does NOT exit after the measurement window ends.
+	// It continues sending requests so the system stays "warm" and avoids bias.
+
 	fmt.Printf("Making requests for %dms at %.2fms interval\n", endTimeMs,
 		repeatIntervalMs)
 
+	// One-shot timer for the end of the measurement window.
 	endTime := time.Duration(endTimeMs) * time.Millisecond
-	endTicker := time.NewTicker(endTime)
+	endTimer := time.NewTimer(endTime)
+	defer endTimer.Stop()
 
+	// Interval controls how long to wait between requests.
+	// It can be updated mid-run via requestIntervalUpdates.
 	interval := Interval{}
 	interval.Initialize(repeatIntervalMs, distributionName)
 
+	// Updates may be provided out of order in JSON; apply them in time order.
+	sort.Slice(requestIntervalUpdates, func(i, j int) bool {
+		return requestIntervalUpdates[i].AtMs < requestIntervalUpdates[j].AtMs
+	})
+	updateIdx := 0                // index of the next update to apply
+	experimentStart := time.Now() // time 0 for AtMs offsets
+
+	// Applies any updates whose AtMs has already passed.
+	// Multiple updates can be applied in one call if the system is behind.
+	applyDueUpdates := func() {
+		elapsedMs := int(time.Since(experimentStart).Milliseconds())
+		for updateIdx < len(requestIntervalUpdates) && requestIntervalUpdates[updateIdx].AtMs <= elapsedMs {
+			interval.Initialize(requestIntervalUpdates[updateIdx].ReqIntervalMs, distributionName)
+			updateIdx++
+		}
+	}
+
+	// Apply updates scheduled at or before time 0.
+	applyDueUpdates()
+
+	// resetTimer safely resets a timer even if it has already fired.
+	// (If it fired, we drain the channel to avoid spurious wakeups later.)
+	resetTimer := func(t *time.Timer, d time.Duration) {
+		if d < 0 {
+			d = 0
+		}
+		if !t.Stop() {
+			select {
+			case <-t.C:
+			default:
+			}
+		}
+		t.Reset(d)
+	}
+
+	// lastTime is the time we last sent a request.
+	// We subtract time.Since(lastTime) so that work done in the loop doesn't cause drift.
 	lastTime := time.Now()
 
+	// reqTimer triggers the next request send.
+	// We reuse a single timer to avoid creating new timers every select iteration.
+	reqTimer := time.NewTimer(0)
+	defer reqTimer.Stop()
+	resetTimer(reqTimer, interval.Next())
+
+	// updateTimer triggers the next interval update time (if any).
+	updateTimer := time.NewTimer(time.Hour)
+	defer updateTimer.Stop()
+	updateEnabled := false // whether updateTimer is currently armed for a real update
+	if updateIdx < len(requestIntervalUpdates) {
+		updateEnabled = true
+		at := experimentStart.Add(time.Duration(requestIntervalUpdates[updateIdx].AtMs) * time.Millisecond)
+		resetTimer(updateTimer, time.Until(at))
+	}
+
 	reqCounter := 1
+	measurementEnded := false // defensive guard to avoid double-sending on lastReqCountChan
 	for {
 		select {
-		case <-time.After(interval.Next() - time.Since(lastTime)):
+		case <-reqTimer.C:
+			// Time to send the next request.
+			// First, apply any interval updates that are already due.
+			applyDueUpdates()
 			lastTime = time.Now()
 			endpoint := lb.GetEndpointForReq(reqCounter)
 			cpuModifier.NotifyReqSent(endpoint)
@@ -357,13 +435,28 @@ func repeatRequests(
 					endpoint.URL)
 			}
 			reqCounter += 1
-		case <-endTicker.C:
-			endTicker.Stop()
-
-			lastReqCountChan <- reqCounter
-
-			// Don't return, we need to continously send requests to avoid bias
-			// return
+			// Schedule the next request.
+			resetTimer(reqTimer, interval.Next()-time.Since(lastTime))
+		case <-endTimer.C:
+			// Measurement window ended. Tell the receiver the last request id to include.
+			// Keep sending requests after this point to avoid bias.
+			if !measurementEnded {
+				measurementEnded = true
+				lastReqCountChan <- reqCounter
+			}
+		case <-updateTimer.C:
+			if updateEnabled {
+				// An interval update time fired. Apply any updates due and re-arm timer.
+				applyDueUpdates()
+				if updateIdx < len(requestIntervalUpdates) {
+					at := experimentStart.Add(time.Duration(requestIntervalUpdates[updateIdx].AtMs) * time.Millisecond)
+					resetTimer(updateTimer, time.Until(at))
+				} else {
+					updateEnabled = false
+				}
+				// Make the new interval take effect immediately for the next send.
+				resetTimer(reqTimer, interval.Next()-time.Since(lastTime))
+			}
 		}
 	}
 }
@@ -519,18 +612,12 @@ type Endpoint struct {
 }
 
 type Config struct {
-	Endpoints     []Endpoint        `json:"endpoints"`
-	ReqIntervalMs float64           `json:"reqIntervalMs"`
-	DurationMs    int               `json:"durationMs"`
-	LogFileName   string            `json:"logFileName"`
-	StallTimeMs   int               `json:"stallTimeMs"`
-	Headers       map[string]string `json:"headers"`
-}
-
-func jsonToMap(jsonStr string) map[string]string {
-	result := make(map[string]string)
-	json.Unmarshal([]byte(jsonStr), &result)
-	return result
+	Endpoints              []Endpoint              `json:"endpoints"`
+	ReqIntervalMs          float64                 `json:"reqIntervalMs"`
+	RequestIntervalUpdates []RequestIntervalUpdate `json:"requestIntervalUpdates"`
+	DurationMs             int                     `json:"durationMs"`
+	LogFileName            string                  `json:"logFileName"`
+	StallTimeMs            int                     `json:"stallTimeMs"`
 }
 
 func getConfigs() ([]Config, bool, string, bool, bool, bool) {
@@ -554,7 +641,8 @@ func getConfigs() ([]Config, bool, string, bool, bool, bool) {
 	useCPUSharing := flag.Bool("c", false,
 		"Use varying CPU weights to balance a least request load balancer")
 
-	configFileName := flag.String("f", "", "JSON config file name")
+	var configFileName string
+	flag.StringVar(&configFileName, "f", "", "JSON config file name")
 
 	stallTimeMs := flag.Int("s", 0,
 		"Time (in ms) to stall before starting to send requests")
@@ -566,27 +654,30 @@ func getConfigs() ([]Config, bool, string, bool, bool, bool) {
 
 	flag.Parse()
 
-	if *configFileName != "" {
+	if configFileName != "" {
 
 		// read config file
-		file, err := os.ReadFile(*configFileName)
+		file, err := os.ReadFile(configFileName)
 		if err != nil {
 			panic(fmt.Sprintf("Error reading the json file: %s\n", err))
 		}
 
 		var raw_configs []Config
-		json.Unmarshal(file, &raw_configs)
+		if err := json.Unmarshal(file, &raw_configs); err != nil {
+			panic(fmt.Sprintf("Error parsing the json file: %s\n", err))
+		}
 
 		fmt.Printf("Raw Configs: %v\n", raw_configs)
 
 		configs := make([]Config, len(raw_configs))
 		for i, raw_config := range raw_configs {
 			configs[i] = Config{
-				Endpoints:     raw_config.Endpoints,
-				ReqIntervalMs: raw_config.ReqIntervalMs,
-				DurationMs:    raw_config.DurationMs,
-				LogFileName:   raw_config.LogFileName,
-				StallTimeMs:   raw_config.StallTimeMs,
+				Endpoints:              raw_config.Endpoints,
+				ReqIntervalMs:          raw_config.ReqIntervalMs,
+				RequestIntervalUpdates: raw_config.RequestIntervalUpdates,
+				DurationMs:             raw_config.DurationMs,
+				LogFileName:            raw_config.LogFileName,
+				StallTimeMs:            raw_config.StallTimeMs,
 			}
 		}
 
@@ -618,12 +709,12 @@ func getConfigs() ([]Config, bool, string, bool, bool, bool) {
 		}
 
 		configs := []Config{{
-			Endpoints:     endpoints,
-			ReqIntervalMs: reqIntervalMs,
-			DurationMs:    *durationInSec * 1000,
-			LogFileName:   *logFileName,
-			StallTimeMs:   *stallTimeMs,
-			Headers:       jsonToMap(*headers),
+			Endpoints:              endpoints,
+			ReqIntervalMs:          reqIntervalMs,
+			RequestIntervalUpdates: nil,
+			DurationMs:             *durationInSec * 1000,
+			LogFileName:            *logFileName,
+			StallTimeMs:            *stallTimeMs,
 		}}
 
 		return configs, *isReadable, *distributionName,
@@ -699,11 +790,12 @@ func hit(
 		&lb,
 		resChan,
 		reqIntervalMs,
+		config.RequestIntervalUpdates,
 		durationMs,
 		lastReqCountChan,
 		isReadable,
 		distributionName,
-		config.Headers)
+		make(map[string]string))
 
 	// now, repeatedly listen for responses and the last response number,
 	// 	end when the last response is received
