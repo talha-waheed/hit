@@ -216,7 +216,7 @@ func (lb *CPUWeightModifier) handleState() {
 	defer logFile.Close()
 	lb.logWriter = bufio.NewWriter(logFile)
 
-	for { 
+	for {
 		select {
 		case <-lb.newReqCountCh:
 			// collect all reqcounts in a map (appNum -> reqCount)
