@@ -763,7 +763,7 @@ func hit(
 	// set load balancer algorithm
 	loadBalancerAlgo := "NONE"
 	if len(reqURLs) > 1 {
-		loadBalancerAlgo = "LEAST_REQUEST"
+		loadBalancerAlgo = "ROUND_ROBIN"
 	}
 	fmt.Printf("Load balancer algorithm: %s\n", loadBalancerAlgo)
 

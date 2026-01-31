@@ -55,11 +55,16 @@ func (lb *LoadBalancer) startNoneLoadBalancer() {
 }
 
 func (lb *LoadBalancer) StartLoadBalancer() {
-	if lb.loadBalancerAlgo == "NONE" {
+	switch lb.loadBalancerAlgo {
+	case "NONE":
 		lb.startNoneLoadBalancer()
-	} else if lb.loadBalancerAlgo == "LEAST_REQUEST" {
+	case "RANDOM":
+		// nothing to do
+	case "ROUND_ROBIN":
+		// nothing to do
+	case "LEAST_REQUEST":
 		lb.startLeastRequestLoadBalancer()
-	} else {
+	default:
 		panic("Invalid load balancer algorithm")
 	}
 }
@@ -131,22 +136,37 @@ func (lb *LoadBalancer) handleState() {
 
 func (lb *LoadBalancer) GetEndpointForReq(reqNum int) Endpoint {
 
-	if lb.loadBalancerAlgo == "NONE" {
+	switch lb.loadBalancerAlgo {
+	case "NONE":
+		// randomly return one of the endpoints
 		return lb.endpoints[0]
-	} else if lb.loadBalancerAlgo == "LEAST_REQUEST" {
+	case "RANDOM":
+		// randomly return one of the endpoints
+		numEndpoints := len(lb.endpoints)
+		return lb.endpoints[rand.Intn(numEndpoints)]
+	case "ROUND_ROBIN":
+		// return endpoints in round robin fashion
+		endpoint := lb.endpoints[reqNum%len(lb.endpoints)]
+		return endpoint
+	case "LEAST_REQUEST":
 		lb.requestForEndpointCh <- reqNum
 		return <-lb.receiveEndpointCh
-	} else {
+	default:
 		panic("Invalid load balancer algorithm")
 	}
 }
 
 func (lb *LoadBalancer) NotifyReqCompleted(reqNum int) {
-	if lb.loadBalancerAlgo == "NONE" {
+	switch lb.loadBalancerAlgo {
+	case "NONE":
 		// do nothing
-	} else if lb.loadBalancerAlgo == "LEAST_REQUEST" {
+	case "RANDOM":
+		// do nothing
+	case "ROUND_ROBIN":
+		// do nothing
+	case "LEAST_REQUEST":
 		lb.notifyReqCompletedCh <- reqNum
-	} else {
+	default:
 		panic("Invalid load balancer algorithm")
 	}
 }
