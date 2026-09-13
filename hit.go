@@ -310,15 +310,15 @@ func (interval *Interval) Next() time.Duration {
 		mean := interval.repeatIntervalMs
 		exponentialRandom := -mean * math.Log(1-rand.Float64())
 		// fmt.Printf("Exponential Random: %f\n", exponentialRandom)
-		return time.Duration(exponentialRandom) * time.Millisecond
+		return time.Duration(exponentialRandom * float64(time.Millisecond))
 
 	} else if interval.distribution == "pareto" {
 		mean := interval.repeatIntervalMs
 		paretoRandom := paretoSampleWithMean(mean)
-		return time.Duration(paretoRandom) * time.Millisecond
+		return time.Duration(paretoRandom * float64(time.Millisecond))
 
 	} else {
-		return time.Duration(interval.repeatIntervalMs) * time.Millisecond
+		return time.Duration(interval.repeatIntervalMs * float64(time.Millisecond))
 	}
 }
 
@@ -620,7 +620,7 @@ type Config struct {
 	StallTimeMs            int                     `json:"stallTimeMs"`
 }
 
-func getConfigs() ([]Config, bool, string, bool, bool, bool) {
+func getConfigs() ([]Config, bool, string, bool, bool, bool, int64) {
 
 	var urls arrayFlags
 	flag.Var(&urls, "url", "an endpoint's URL to send requests to")
@@ -651,6 +651,10 @@ func getConfigs() ([]Config, bool, string, bool, bool, bool) {
 		"distr",
 		"none",
 		"Distribution name [none|exponential|pareto] (default: none)")
+	seed := flag.Int64(
+		"seed",
+		time.Now().UnixNano(),
+		"Seed for request-arrival and request-CPU random distributions")
 
 	flag.Parse()
 
@@ -684,7 +688,7 @@ func getConfigs() ([]Config, bool, string, bool, bool, bool) {
 		fmt.Printf("Configs: %v\n", configs)
 
 		return configs, *isReadable, *distributionName,
-			*useNodalLB, *useGlobalLB, *useCPUSharing
+			*useNodalLB, *useGlobalLB, *useCPUSharing, *seed
 
 	} else {
 
@@ -718,7 +722,7 @@ func getConfigs() ([]Config, bool, string, bool, bool, bool) {
 		}}
 
 		return configs, *isReadable, *distributionName,
-			*useNodalLB, *useGlobalLB, *useCPUSharing
+			*useNodalLB, *useGlobalLB, *useCPUSharing, *seed
 	}
 }
 
@@ -996,7 +1000,9 @@ func main() {
 
 	// set benchmark configs
 	configs, isReadable, distributionName,
-		useNodalLB, useGlobalLB, useCPUSharing := getConfigs()
+		useNodalLB, useGlobalLB, useCPUSharing, seed := getConfigs()
+	rand.Seed(seed)
+	fmt.Printf("Random seed: %d\n", seed)
 
 	wg := new(sync.WaitGroup)
 
